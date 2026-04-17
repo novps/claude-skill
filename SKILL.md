@@ -47,7 +47,11 @@ Run this discovery sequence end-to-end, then summarise findings and show a draft
    - **Django** (`requirements.txt` or `pyproject.toml` has `django`): `web` (gunicorn/uvicorn), plus `celery` + `celery-beat` workers if celery is present.
    - **Rails**: `web` (puma), `sidekiq` worker if `sidekiq` in Gemfile.
    - **Next.js / Node**: single `web` from `npm start`, unless `package.json` scripts hint at workers.
-4. **Existing envs**
+4. **Data services** — postgres / redis detected as compose services?
+   - Novps doesn't auto-provision from the manifest. The skill **creates managed instances** by default (don't ask whether to provision — ask *which size*, only if non-trivial).
+   - Supported engines: `postgres` (versions 14, 15, 16), `redis`. For anything else (mysql, mongo, clickhouse), flag it — user must either run it as a resource in the manifest or point to an external host.
+   - See the "Provisioning databases" section below for the exact flow.
+5. **Existing envs**
    - If `.env` or `.env.example` exists, parse keys and mirror them into the manifest's `envs` as `${KEY}` placeholders. Don't copy values.
 
 ### Discovery output — what to present to the user
@@ -85,6 +89,42 @@ Has GitHub remote (git remote get-url origin → github.com/...)?
 - First deploy (no previous image): `latest`.
 - Subsequent deploys in a git repo: `$(git rev-parse --short HEAD)`.
 - Only ask the user if they explicitly want to pick the tag.
+
+## Provisioning databases (postgres / redis)
+
+When discovery detects a `postgres` or `redis` service in `docker-compose.yml` (or via framework conventions like Laravel needing a DB), the skill **provisions the managed instance automatically** as part of the deploy flow — don't stop and ask whether to create it.
+
+### Flow
+
+1. **Create** (default size `sm`, bump only if the user said "prod" or similar):
+   ```bash
+   novps databases create --engine postgres -s sm --postgres-version 16 --wait --json
+   novps databases create --engine redis    -s sm --wait --json
+   ```
+   Parse the returned `id` from JSON.
+2. **Read credentials** in env format:
+   ```bash
+   novps databases get <db-id> --format env --show-password
+   ```
+   Append the output lines directly into the repo's `.env` (creating it if missing). This gives `DATABASE_URL`, `REDIS_URL`, etc. — whatever the CLI emits, pass through as-is, don't rename.
+3. **Grant the app access**:
+   ```bash
+   novps databases allow-apps <db-id> <app-name>
+   ```
+   Required — databases are isolated by default. Do this before `apps apply`, or the first deploy will come up unable to connect.
+4. **Mirror into the manifest**: ensure the resource `envs` reference the keys as `${DATABASE_URL}`, `${REDIS_URL}`, etc. Apply picks them up via `--env-file .env`.
+
+### Defaults
+
+- Size: `sm` for new/dev apps. Ask only if the user mentions production/scale.
+- Postgres version: `16` (latest supported) unless the project pins a version in compose or docs.
+- Node count: `1` — replicas are a separate decision the user should make explicitly.
+
+### When *not* to auto-provision
+
+- An existing novps database with a matching name is already in `databases list` — use it, don't create a duplicate. Offer the user: "found existing `<name>` postgres, wire to it? (y/n)".
+- The user has external managed DBs (RDS, Neon, Upstash) — let them paste the URL, don't create anything.
+- The engine isn't supported (`mysql`, `mongo`, `clickhouse`) — tell the user, suggest either self-hosting as a resource or external provider.
 
 ## The deploy flow
 
@@ -176,11 +216,12 @@ For destructive ops (`delete`, `resize`, `set-access`), always show the user wha
 
 **"Deploy this repo to novps"** (happy path):
 1. Check prereqs.
-2. Is there a `novps.yaml`? If yes → skip to step 5.
+2. Is there a `novps.yaml`? If yes → skip to step 6.
 3. **Project discovery** (Step 0): inspect git remote, `docker-compose.yml` / `Procfile` / `Dockerfile`, framework files. Pick `source_type` via the decision tree.
-4. Draft `novps.yaml` from detected services (web/worker/cron as inferred), mirror `.env`/`.env.example` keys as `${VAR}` placeholders. Show it, get one yes/no.
-5. `novps apps apply <name> -f novps.yaml --env-file .env --wait`.
-6. Tail logs on changed resources until healthy.
+4. **Provision data services** detected in compose (postgres/redis) — `databases create --wait`, append `databases get --format env --show-password` output to `.env`, `databases allow-apps`.
+5. Draft `novps.yaml` from detected application services (web/worker/cron as inferred), referencing `.env` keys as `${VAR}`. Show it, get one yes/no.
+6. `novps apps apply <name> -f novps.yaml --env-file .env --wait`.
+7. Tail logs on changed resources until healthy.
 
 **"Ship the latest commit"**:
 1. `sha=$(git rev-parse --short HEAD)`, ensure image for that sha exists in registry (or was just pushed).
