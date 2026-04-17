@@ -1,0 +1,40 @@
+envs:
+  - key: LOG_LEVEL
+    value: info
+  - key: DB_URL
+    value: ${DB_URL}
+
+resources:
+  - name: api
+    type: web-app
+    source_type: docker
+    source:
+      type: docker
+      credentials: ''
+      name: ghcr.io/owner/repo
+      tag: ${IMAGE_TAG}         # pass via --env-file .env, e.g. IMAGE_TAG=$(git rev-parse --short HEAD)
+    config:
+      port: "8080"
+      restart_policy: always
+    replicas:
+      type: sm
+      count: 2
+    envs: []
+    volumes: []
+
+  - name: worker
+    type: worker
+    source_type: docker
+    source:
+      type: docker
+      credentials: ''
+      name: ghcr.io/owner/repo
+      tag: ${IMAGE_TAG}         # pass via --env-file .env, e.g. IMAGE_TAG=$(git rev-parse --short HEAD)
+    config:
+      command: "python -m app.worker"
+      restart_policy: always
+    replicas:
+      type: sm
+      count: 1
+    envs: []
+    volumes: []
