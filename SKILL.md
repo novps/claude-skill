@@ -73,8 +73,9 @@ Has GitHub remote (git remote get-url origin → github.com/...)?
 ├── Yes
 │   └── novps github list → non-empty?
 │       ├── Yes → source_type: github  ← DEFAULT for new projects
-│       └── No  → tell user: "Install the novps GitHub App on this repo
-│                 in the novps dashboard, then rerun. Or pick docker mode."
+│       └── No  → give user the install link directly:
+│                 https://github.com/apps/novps/installations/new
+│                 After they install it on the repo, rerun. Or pick docker mode.
 └── No
     └── source_type: docker
         ├── novps registry list → has a namespace?
@@ -84,6 +85,8 @@ Has GitHub remote (git remote get-url origin → github.com/...)?
 ```
 
 **Why github-source is the default for new projects:** zero registry setup, zero local build, no credentials to juggle. Only fall back to docker mode when the repo isn't on GitHub, the user already has a CI that pushes images, or the GitHub App isn't installable.
+
+**GitHub App install link:** `https://github.com/apps/novps/installations/new` — send this directly when `novps github list` is empty. One click installs the app on the repo; no dashboard detour.
 
 **Default image tag:**
 - First deploy (no previous image): `latest`.
