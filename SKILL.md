@@ -73,9 +73,9 @@ Has GitHub remote (git remote get-url origin → github.com/...)?
 ├── Yes
 │   └── novps github list → non-empty?
 │       ├── Yes → source_type: github  ← DEFAULT for new projects
-│       └── No  → give user the install link directly:
-│                 https://github.com/apps/novps/installations/new
-│                 After they install it on the repo, rerun. Or pick docker mode.
+│       └── No  → offer to open the install page in the browser
+│                 (`open` on macOS, `xdg-open` on Linux). See
+│                 "GitHub App install" below. After install, rerun.
 └── No
     └── source_type: docker
         ├── novps registry list → has a namespace?
@@ -86,7 +86,18 @@ Has GitHub remote (git remote get-url origin → github.com/...)?
 
 **Why github-source is the default for new projects:** zero registry setup, zero local build, no credentials to juggle. Only fall back to docker mode when the repo isn't on GitHub, the user already has a CI that pushes images, or the GitHub App isn't installable.
 
-**GitHub App install link:** `https://github.com/apps/novps/installations/new` — send this directly when `novps github list` is empty. One click installs the app on the repo; no dashboard detour.
+**GitHub App install — open the browser for the user.** When `novps github list` is empty, don't just print the URL. Offer to open it:
+
+```bash
+# macOS
+open https://github.com/apps/novps/installations/new
+# Linux
+xdg-open https://github.com/apps/novps/installations/new
+# Windows (PowerShell)
+start https://github.com/apps/novps/installations/new
+```
+
+Pick the right command for the user's platform (`uname -s` → `Darwin` | `Linux` | other). Say something like *"Opening the novps GitHub App install page — pick the repo, hit install, then tell me to continue."* After they say go, rerun `novps github list` to confirm, then proceed with the deploy.
 
 **Default image tag:**
 - First deploy (no previous image): `latest`.
