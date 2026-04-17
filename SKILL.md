@@ -28,6 +28,64 @@ novps auth status      # must show authenticated
 - Not authenticated → `novps auth login` (the CLI will prompt for the token interactively; prefer this over passing `--token` in a shared terminal, since the token lands in shell history). The user must generate a PAT (prefix `nvps_`) in the novps dashboard first.
 - Wrong project → every command accepts `--project/-p <alias>`; default alias is `default`.
 
+## Step 0 — Project discovery (run before asking anything)
+
+A good deploy UX means **investigating first, asking last**. Before any question to the user, inspect the working directory and propose a plan they can accept or tweak. Never dump a list of questions cold.
+
+Run this discovery sequence end-to-end, then summarise findings and show a draft manifest:
+
+1. **Git / GitHub signals**
+   - `git rev-parse --is-inside-work-tree` — is this a git repo?
+   - `git remote get-url origin` — is there a GitHub remote? (Enables build-from-source.)
+   - `git rev-parse --short HEAD` — default image tag when git is available.
+2. **Service topology**
+   - `docker-compose.yml` / `docker-compose.yaml` / `compose.yaml` — **authoritative** when present. Every service becomes a candidate resource. Read `image`, `build`, `command`, `ports`, `environment`.
+   - `Procfile` — `web:` → web-app, `worker:` → worker, `release:` → one-off (pre-deploy).
+   - `Dockerfile` — single-service fallback. Read `EXPOSE` for port, `CMD`/`ENTRYPOINT` for command hints.
+3. **Framework conventions** (only after the above — don't invent services)
+   - **Laravel** (`composer.json` contains `laravel/framework`): typical resources are `web` (nginx/php-fpm), `horizon` or `queue` worker (`php artisan queue:work` / `horizon`), `scheduler` cron (`* * * * *` → `php artisan schedule:run`).
+   - **Django** (`requirements.txt` or `pyproject.toml` has `django`): `web` (gunicorn/uvicorn), plus `celery` + `celery-beat` workers if celery is present.
+   - **Rails**: `web` (puma), `sidekiq` worker if `sidekiq` in Gemfile.
+   - **Next.js / Node**: single `web` from `npm start`, unless `package.json` scripts hint at workers.
+4. **Existing envs**
+   - If `.env` or `.env.example` exists, parse keys and mirror them into the manifest's `envs` as `${KEY}` placeholders. Don't copy values.
+
+### Discovery output — what to present to the user
+
+After discovery, output exactly this:
+
+```
+Detected: <stack>, <N> services: <names>
+Source mode: <github | docker> because <reason>
+Manifest draft written to novps.yaml (review before apply)
+```
+
+Then show the draft and ask a single yes/no: *"Apply this as `<app-name>`?"* If the user rejects specific parts, edit in place rather than re-asking from scratch.
+
+## Choosing `source_type` — decide, don't ask
+
+```
+Has GitHub remote (git remote get-url origin → github.com/...)?
+├── Yes
+│   └── novps github list → non-empty?
+│       ├── Yes → source_type: github  ← DEFAULT for new projects
+│       └── No  → tell user: "Install the novps GitHub App on this repo
+│                 in the novps dashboard, then rerun. Or pick docker mode."
+└── No
+    └── source_type: docker
+        ├── novps registry list → has a namespace?
+        │   ├── Yes → use it (single auth, no cross-registry creds)
+        │   └── No  → direct user to create a namespace in the novps dashboard
+        └── Or any external registry the user already uses (ghcr, Docker Hub).
+```
+
+**Why github-source is the default for new projects:** zero registry setup, zero local build, no credentials to juggle. Only fall back to docker mode when the repo isn't on GitHub, the user already has a CI that pushes images, or the GitHub App isn't installable.
+
+**Default image tag:**
+- First deploy (no previous image): `latest`.
+- Subsequent deploys in a git repo: `$(git rev-parse --short HEAD)`.
+- Only ask the user if they explicitly want to pick the tag.
+
 ## The deploy flow
 
 Novps is **manifest-driven**. The source of truth is `novps.yaml` at the repo root. The app name is not in the YAML — it's the CLI argument.
@@ -57,14 +115,7 @@ After export, show a diff of what was exported, then let the user edit before ap
 
 ### 3. No app exists yet at all?
 
-The user has two modes — pick once, per project:
-
-- **Docker (pre-built image)** — any registry (ghcr, novps registry, Docker Hub). Fastest if they already push images in CI.
-- **Build from source (GitHub)** — novps builds from the repo on each deploy. Requires novps GitHub App installed on the repo + the user's GitHub OAuth linked on novps.
-
-Check with `novps github list`. Empty → user must go to the novps dashboard to connect GitHub before build-from-source works. The CLI cannot do that step.
-
-See `reference/novps.docker.example.yaml` and `reference/novps.github.example.yaml`. Schema details in `reference/manifest-schema.md`.
+Run **Step 0 — Project discovery** (above), pick `source_type` via the decision tree, draft a `novps.yaml` from detected services, show it to the user, then apply. See `reference/novps.docker.example.yaml` and `reference/novps.github.example.yaml` for starter shapes; schema in `reference/manifest-schema.md`.
 
 ## Fast paths (no manifest edit needed)
 
@@ -79,7 +130,7 @@ Use these when the intent is narrow — skip `apps apply`, go direct.
 | Restart (redeploy same image) | `novps resources deploy <resource-id>` or `novps apps deploy <app-id>` |
 | Edit image + don't deploy yet | `novps resources update <resource-id> --image X --tag Y --no-deploy` |
 
-Default tag strategy when the user doesn't specify: `git rev-parse --short HEAD`.
+Default tag strategy: `latest` for a first deploy, `$(git rev-parse --short HEAD)` once the project has a git repo and an image has been shipped before.
 
 ## Observability
 
@@ -125,9 +176,11 @@ For destructive ops (`delete`, `resize`, `set-access`), always show the user wha
 
 **"Deploy this repo to novps"** (happy path):
 1. Check prereqs.
-2. Is there a `novps.yaml`? If no → bootstrap (see above) or ask user if they want to start from an example.
-3. `novps apps apply <name> -f novps.yaml --env-file .env --wait`.
-4. Tail logs on changed resources until healthy.
+2. Is there a `novps.yaml`? If yes → skip to step 5.
+3. **Project discovery** (Step 0): inspect git remote, `docker-compose.yml` / `Procfile` / `Dockerfile`, framework files. Pick `source_type` via the decision tree.
+4. Draft `novps.yaml` from detected services (web/worker/cron as inferred), mirror `.env`/`.env.example` keys as `${VAR}` placeholders. Show it, get one yes/no.
+5. `novps apps apply <name> -f novps.yaml --env-file .env --wait`.
+6. Tail logs on changed resources until healthy.
 
 **"Ship the latest commit"**:
 1. `sha=$(git rev-parse --short HEAD)`, ensure image for that sha exists in registry (or was just pushed).
