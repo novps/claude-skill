@@ -30,14 +30,14 @@ Clone or download this repo into your project's `.claude/skills/novps/` director
 
 ```bash
 mkdir -p .claude/skills
-git clone https://github.com/novps/novps-claude-skill .claude/skills/novps
+git clone https://github.com/novps/claude-skill .claude/skills/novps
 ```
 
 ### As a user-level skill (all projects)
 
 ```bash
 mkdir -p ~/.claude/skills
-git clone https://github.com/novps/novps-claude-skill ~/.claude/skills/novps
+git clone https://github.com/novps/claude-skill ~/.claude/skills/novps
 ```
 
 Claude Code will auto-load the skill on matching intents.
